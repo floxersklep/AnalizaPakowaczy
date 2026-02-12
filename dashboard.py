@@ -6,23 +6,25 @@ import time
 import re
 from datetime import datetime, timedelta
 
-# --- KONFIGURACJA STRONY (musi być pierwsza) ---
+# --- KONFIGURACJA STRONY (Musi być na samym początku) ---
 st.set_page_config(page_title="Raport Pakowaczy FINAL", layout="wide", page_icon="📦")
 
 # ==========================================
 # 🔐 KONFIGURACJA BEZPIECZEŃSTWA
 # ==========================================
 
-# 1. HASŁO DO STRONY (Zmień na swoje!)
+# 1. HASŁO DO STRONY (Możesz zmienić na swoje)
 HASLO_DO_STRONY = "flopak323" 
 
 # 2. TOKEN BASELINKER (Pobierany bezpiecznie z Secrets)
-# Jeśli uruchamiasz to lokalnie, musisz utworzyć plik .streamlit/secrets.toml
 try:
     TOKEN = st.secrets["TOKEN"]
 except FileNotFoundError:
     st.error("❌ BŁĄD KONFIGURACJI: Nie znaleziono tokenu API!")
     st.info("Jeśli jesteś w Streamlit Cloud: Wejdź w Settings -> Secrets i wklej tam: TOKEN = 'twoj-dlugi-token'")
+    st.stop()
+except KeyError:
+    st.error("❌ BŁĄD KONFIGURACJI: Token nie jest zdefiniowany w Secrets!")
     st.stop()
 
 # ==========================================
@@ -33,7 +35,7 @@ if 'zalogowany' not in st.session_state:
     st.session_state['zalogowany'] = False
 
 if not st.session_state['zalogowany']:
-    # Prosty styl dla ekranu logowania
+    # Styl dla ekranu logowania
     st.markdown("""
         <style>
         .stApp {background-color: #0e1117;}
@@ -57,7 +59,7 @@ if not st.session_state['zalogowany']:
 # 🚀 GŁÓWNA APLIKACJA (Dostępna po zalogowaniu)
 # ==========================================
 
-# --- KONFIGURACJA LOGIKI ---
+# --- STAŁE I KONFIGURACJA LOGIKI ---
 DNI_DO_POBRANIA_API = 90 
 FILTR_STATUSOW = [61254, 110811] 
 PROG_ODCIECIA_CZASU_MINUT = 10   
@@ -85,7 +87,7 @@ st.markdown("""
     div.stButton > button {
         background-color: #0078d4; color: white; border: none; width: 100%;
     }
-    /* Ukrycie przycisku 'Manage app' dla zwykłych userów */
+    /* Ukrycie menu Streamlit dla zwykłych userów */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -177,7 +179,7 @@ def oblicz_logike_scisla(df_osoby):
     df_osoby = df_osoby.copy()
     df_osoby['Minuta_Str'] = df_osoby['Godzina'].dt.strftime('%Y-%m-%d %H:%M')
     
-    # BŁĘDY
+    # 1. WYKRYWANIE BŁĘDÓW (Duplikaty + Poza godzinami pracy)
     counts = df_osoby['Minuta_Str'].value_counts()
     bledne_minuty = counts[counts > 1].index.tolist()
     maska_duplikaty = df_osoby['Minuta_Str'].isin(bledne_minuty)
@@ -187,7 +189,7 @@ def oblicz_logike_scisla(df_osoby):
     df_bledy = df_osoby[maska_total_bledy]
     paczki_bledy = df_bledy['Paczki'].sum()
     
-    # DANE VALID
+    # 2. DANE POPRAWNE (Valid)
     df_valid = df_osoby[~maska_total_bledy].sort_values('Godzina')
     timestamps = df_valid['Godzina'].tolist()
     paczki_lista = df_valid['Paczki'].tolist()
@@ -208,11 +210,14 @@ def oblicz_logike_scisla(df_osoby):
         biezace_paczki = paczki_lista[i]
         
         if diff <= PROG_ODCIECIA_CZASU_MINUT:
+            # Normalna praca
             czas_minuty += diff
             paczki_do_sredniej += biezace_paczki
         elif diff <= MAX_PRZERWA_MINUT:
+            # Postój (10-30m) - Wykluczone
             paczki_postoj += biezace_paczki
         else:
+            # Długa przerwa (>30m) - Reset
             czas_minuty += CZAS_ZA_START
             paczki_do_sredniej += biezace_paczki
             liczba_dlugich_przerw += 1 
@@ -255,6 +260,7 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 Filtry")
 
+# FILTRY DATY
 opcja_czasu = st.sidebar.radio(
     "📅 Okres:", 
     ["Dzisiaj", "Wczoraj", "Ostatnie 5 dni", "Bieżący miesiąc", "Poprzedni miesiąc", "Zakres niestandardowy"],
@@ -263,13 +269,16 @@ opcja_czasu = st.sidebar.radio(
 dzis = datetime.now().date()
 start, end = dzis, dzis
 
-if opcja_czasu == "Wczoraj": start = end = dzis - timedelta(days=1)
-elif opcja_czasu == "Ostatnie 5 dni": start = dzis - timedelta(days=5)
+if opcja_czasu == "Wczoraj": 
+    start = end = dzis - timedelta(days=1)
+elif opcja_czasu == "Ostatnie 5 dni": 
+    start = dzis - timedelta(days=5)
 elif opcja_czasu == "Bieżący miesiąc":
     start = dzis.replace(day=1)
     end = dzis
 elif opcja_czasu == "Poprzedni miesiąc":
-    end = dzis.replace(day=1) - timedelta(days=1)
+    first_day_current = dzis.replace(day=1)
+    end = first_day_current - timedelta(days=1)
     start = end.replace(day=1)
 elif opcja_czasu == "Zakres niestandardowy":
     c1, c2 = st.sidebar.columns(2)
@@ -282,6 +291,8 @@ df = df_full.loc[maska]
 lista_osob = sorted(df['Osoba'].unique().tolist())
 wybrani = st.sidebar.multiselect("👥 Pracownicy:", lista_osob, default=lista_osob)
 if wybrani: df = df[df['Osoba'].isin(wybrani)]
+
+# --- OBLICZENIA I TABELE ---
 
 if not df.empty:
     ranking_data = []
@@ -303,6 +314,7 @@ if not df.empty:
     
     df_stats = pd.DataFrame(ranking_data)
     
+    # Agregacja
     final_stats = df_stats.groupby('Osoba').agg({
         'Paczki Razem': 'sum',
         'Paczki Średnia': 'sum',
@@ -316,6 +328,7 @@ if not df.empty:
     final_stats['Wydajnosc'] = final_stats['Wydajnosc'].fillna(0)
     final_stats = final_stats.sort_values('Wydajnosc', ascending=False)
 
+    # KPI Globalne
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("📦 Paczki Razem", int(final_stats['Paczki Razem'].sum()))
     
@@ -335,5 +348,34 @@ if not df.empty:
         col2.dataframe(
             final_stats,
             column_config={
-                "Paczki Razem": st.column_config.ProgressColumn("Paczki", format="%d", max_value=int(final_stats['Paczki Razem'].max())),
-                "Błędy (System/Noc)": st.column_
+                "Paczki Razem": st.column_config.ProgressColumn("Paczki", format="%d", max_value=int(final_stats['Paczki Razem'].max()) if not final_stats.empty else 100),
+                "Błędy (System/Noc)": st.column_config.NumberColumn("Błędy", format="%d 🛑", help="Duplikaty lub poza godz. 05:00-18:00"),
+                "Postój (10-30m)": st.column_config.NumberColumn("Postój", format="%d ⏳", help="Paczki po postoju 10-30m (nie wliczane do średniej)."),
+                "Długie Przerwy": st.column_config.NumberColumn("Przerwy >30m", format="%d ☕"),
+                "Wydajnosc": st.column_config.NumberColumn("Wydajność/h", format="%.1f"),
+                "Godziny": st.column_config.NumberColumn("Czas Netto", format="%.1f h"),
+                "Paczki Średnia": st.column_config.NumberColumn("Baza Średniej", format="%d")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        st.write("### 🕵️‍♂️ Szczegóły dnia")
+        st.dataframe(
+            df_stats.sort_values(['Data', 'Osoba'], ascending=False),
+            column_config={
+                "Data": st.column_config.DateColumn("Data"),
+                "Godziny": st.column_config.NumberColumn("Godziny", format="%.2f h"),
+                "Błędy (System/Noc)": st.column_config.NumberColumn("Błędy/Noc", format="%d")
+            },
+            use_container_width=True
+        )
+
+    with tab2:
+        kartony = df.groupby('Karton')['Paczki'].sum().reset_index().sort_values('Paczki', ascending=False)
+        c_k1, c_k2 = st.columns([2, 1])
+        c_k1.bar_chart(kartony.set_index('Karton'), color="#0078d4")
+        c_k2.dataframe(kartony, hide_index=True, use_container_width=True)
+
+else:
+    st.info("Brak danych do wyświetlenia. Odśwież API lub zmień filtry.")
