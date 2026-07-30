@@ -13,10 +13,8 @@ st.set_page_config(page_title="Raport Pakowaczy FINAL", layout="wide", page_icon
 # 🔐 KONFIGURACJA BEZPIECZEŃSTWA
 # ==========================================
 
-# 1. HASŁO DO STRONY (Możesz zmienić na swoje)
 HASLO_DO_STRONY = "flopak323" 
 
-# 2. TOKEN BASELINKER (Pobierany bezpiecznie z Secrets)
 try:
     TOKEN = st.secrets["TOKEN"]
 except FileNotFoundError:
@@ -35,7 +33,6 @@ if 'zalogowany' not in st.session_state:
     st.session_state['zalogowany'] = False
 
 if not st.session_state['zalogowany']:
-    # Styl dla ekranu logowania
     st.markdown("""
         <style>
         .stApp {background-color: #0e1117;}
@@ -53,17 +50,17 @@ if not st.session_state['zalogowany']:
                 st.rerun()
             else:
                 st.error("Błędne hasło!")
-    st.stop() # ZATRZYMUJE KOD - DALEJ NIC SIĘ NIE WYKONA BEZ LOGOWANIA
+    st.stop()
 
 # ==========================================
-# 🚀 GŁÓWNA APLIKACJA (Dostępna po zalogowaniu)
+# 🚀 GŁÓWNA APLIKACJA
 # ==========================================
 
 # --- STAŁE I KONFIGURACJA LOGIKI ---
 DNI_DO_POBRANIA_API = 90 
-FILTR_STATUSOW = [61254, 110811] 
+FILTR_STATUSOW = [61254, 110811] # Przywrócone oryginalne dwa statusy do starej metody
 PROG_ODCIECIA_CZASU_MINUT = 10   
-MAX_PRZERWA_MINUT = 30           
+MAX_PRZERWA_MINUT = 30             
 CZAS_ZA_START = 3                
 GODZINA_START = 5                
 GODZINA_KONIEC = 18              
@@ -87,7 +84,6 @@ st.markdown("""
     div.stButton > button {
         background-color: #0078d4; color: white; border: none; width: 100%;
     }
-    /* Ukrycie menu Streamlit dla zwykłych userów */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -170,7 +166,8 @@ def przetworz_do_dataframe(orders):
                 lista.append({
                     "Order ID": order['order_id'], "Status ID": order['order_status_id'],
                     "Osoba": osoba, "Data": czas.date(), "Godzina": czas,
-                    "Paczki": paczki, "Karton": rodzaj_kartonu
+                    "Paczki": paczki, "Karton": rodzaj_kartonu,
+                    "RawOrder": order # Przechowujemy cały obiekt zamówienia dla nowej metody
                 })
             except: pass
     return pd.DataFrame(lista)
@@ -179,7 +176,6 @@ def oblicz_logike_scisla(df_osoby):
     df_osoby = df_osoby.copy()
     df_osoby['Minuta_Str'] = df_osoby['Godzina'].dt.strftime('%Y-%m-%d %H:%M')
     
-    # 1. WYKRYWANIE BŁĘDÓW (Duplikaty + Poza godzinami pracy)
     counts = df_osoby['Minuta_Str'].value_counts()
     bledne_minuty = counts[counts > 1].index.tolist()
     maska_duplikaty = df_osoby['Minuta_Str'].isin(bledne_minuty)
@@ -189,7 +185,6 @@ def oblicz_logike_scisla(df_osoby):
     df_bledy = df_osoby[maska_total_bledy]
     paczki_bledy = df_bledy['Paczki'].sum()
     
-    # 2. DANE POPRAWNE (Valid)
     df_valid = df_osoby[~maska_total_bledy].sort_values('Godzina')
     timestamps = df_valid['Godzina'].tolist()
     paczki_lista = df_valid['Paczki'].tolist()
@@ -210,14 +205,11 @@ def oblicz_logike_scisla(df_osoby):
         biezace_paczki = paczki_lista[i]
         
         if diff <= PROG_ODCIECIA_CZASU_MINUT:
-            # Normalna praca
             czas_minuty += diff
             paczki_do_sredniej += biezace_paczki
         elif diff <= MAX_PRZERWA_MINUT:
-            # Postój (10-30m) - Wykluczone
             paczki_postoj += biezace_paczki
         else:
-            # Długa przerwa (>30m) - Reset
             czas_minuty += CZAS_ZA_START
             paczki_do_sredniej += biezace_paczki
             liczba_dlugich_przerw += 1 
@@ -243,7 +235,7 @@ with c2:
 st.sidebar.header("⚙️ Sterowanie")
 
 if st.sidebar.button("🔄 Odśwież dane z API"):
-    with st.spinner(f"Pobieram dane ({DNI_DO_POBRANIA_API} dni, 2 statusy)..."):
+    with st.spinner(f"Pobieram dane ({DNI_DO_POBRANIA_API} dni)..."):
         raw_data = pobierz_dane_z_api(DNI_DO_POBRANIA_API)
         df_new = przetworz_do_dataframe(raw_data)
         st.session_state['data_frame'] = df_new
@@ -260,7 +252,6 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 Filtry")
 
-# FILTRY DATY
 opcja_czasu = st.sidebar.radio(
     "📅 Okres:", 
     ["Dzisiaj", "Wczoraj", "Ostatnie 5 dni", "Bieżący miesiąc", "Poprzedni miesiąc", "Zakres niestandardowy"],
@@ -314,7 +305,6 @@ if not df.empty:
     
     df_stats = pd.DataFrame(ranking_data)
     
-    # Agregacja
     final_stats = df_stats.groupby('Osoba').agg({
         'Paczki Razem': 'sum',
         'Paczki Średnia': 'sum',
@@ -328,7 +318,6 @@ if not df.empty:
     final_stats['Wydajnosc'] = final_stats['Wydajnosc'].fillna(0)
     final_stats = final_stats.sort_values('Wydajnosc', ascending=False)
 
-    # KPI Globalne
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("📦 Paczki Razem", int(final_stats['Paczki Razem'].sum()))
     
@@ -372,10 +361,51 @@ if not df.empty:
         )
 
     with tab2:
+        st.subheader("📦 Oryginalny Raport Kartonów")
         kartony = df.groupby('Karton')['Paczki'].sum().reset_index().sort_values('Paczki', ascending=False)
         c_k1, c_k2 = st.columns([2, 1])
         c_k1.bar_chart(kartony.set_index('Karton'), color="#0078d4")
         c_k2.dataframe(kartony, hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📦 Dodatkowy Raport Kartonów (Nowa metoda 5DE)")
+
+        # Nowa, niezależna metoda zliczania dla statusu 136559 i dedykowanych pól
+        licznik_5de = {"1x5DE": 0, "2x5DE": 0}
+        nx5de_wystapienia = 0
+
+        for order in df['RawOrder']:
+            # Pobieranie wartości z nowego źródła (status 136559 i dedykowane pole dodatkowe, np. extra_field_2 lub inne)
+            # Tutaj sprawdzamy extra_field_2 jako główne źródło nowej metody
+            val = str(order.get('extra_field_2', '')).strip()
+            
+            if val == "1x5DE":
+                licznik_5de["1x5DE"] += 1
+            elif val == "2x5DE":
+                licznik_5de["2x5DE"] += 1
+            elif val == "3x5DE":
+                licznik_5de["1x5DE"] += 1
+                licznik_5de["2x5DE"] += 1
+            elif val == "4x5DE":
+                licznik_5de["2x5DE"] += 2
+            elif val == "6x5DE":
+                licznik_5de["2x5DE"] += 3
+            elif "5DE" in val:
+                nx5de_wystapienia += 1
+
+        dane_5de = [
+            {"Karton (Nowa metoda)": "1x5DE", "Ilość": licznik_5de["1x5DE"]},
+            {"Karton (Nowa metoda)": "2x5DE", "Ilość": licznik_5de["2x5DE"]}
+        ]
+
+        if nx5de_wystapienia > 0:
+            dane_5de.append({"Karton (Nowa metoda)": "Nx5DE (Inne / Niezróżnicowane)", "Ilość": nx5de_wystapienia})
+
+        df_5de_summary = pd.DataFrame(dane_5de).sort_values('Ilość', ascending=False)
+
+        c_5de1, c_5de2 = st.columns([2, 1])
+        c_5de1.bar_chart(df_5de_summary.set_index('Karton (Nowa metoda)'), color="#2ecc71")
+        c_5de2.dataframe(df_5de_summary, hide_index=True, use_container_width=True)
 
 else:
     st.info("Brak danych do wyświetlenia. Odśwież API lub zmień filtry.")
