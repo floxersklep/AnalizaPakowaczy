@@ -58,7 +58,9 @@ if not st.session_state['zalogowany']:
 
 # --- STAŁE I KONFIGURACJA LOGIKI ---
 DNI_DO_POBRANIA_API = 90 
-FILTR_STATUSOW = [61254, 110811] # Oryginalne dwa statusy do starej metody
+FILTR_STATUSOW = [61254, 110811] # Oryginalne statusy do głównego raportu
+STATUS_NOWYCH_KARTONOW = 136559  # Dedykowany status dla nowej metody 5DE
+
 PROG_ODCIECIA_CZASU_MINUT = 10   
 MAX_PRZERWA_MINUT = 30             
 CZAS_ZA_START = 3                
@@ -129,6 +131,38 @@ def pobierz_dane_z_api(dni):
     my_bar.empty()
     return list({o['order_id']: o for o in wszystkie}.values())
 
+# Dedykowana funkcja pobierająca zamówienia ze statusu 136559 dla nowej metody
+@st.cache_data(ttl=3600, show_spinner=False)
+def pobierz_dane_5de_z_api(dni):
+    date_from = int((datetime.now() - timedelta(days=dni)).timestamp())
+    wszystkie = []
+    id_startowe = 0
+    
+    while True:
+        method_params = {
+            "date_from": date_from, "status_id": STATUS_NOWYCH_KARTONOW,
+            "get_unconfirmed_orders": False, "limit": 100
+        }
+        if id_startowe > 0: method_params["id_from"] = id_startowe
+
+        try:
+            resp = requests.post(
+                "https://api.baselinker.com/connector.php", 
+                data={"token": TOKEN, "method": "getOrders", "parameters": json.dumps(method_params)}
+            ).json()
+            
+            if resp['status'] == 'SUCCESS':
+                batch = resp['orders']
+                if not batch: break
+                wszystkie.extend(batch)
+                id_startowe = batch[-1]['order_id']
+                if len(batch) < 100: break
+                time.sleep(0.03) 
+            else: break
+        except: break
+        
+    return list({o['order_id']: o for o in wszystkie}.values())
+
 def znajdz_rodzaj_kartonu(order):
     pole_2 = str(order.get('extra_field_2', '')).strip()
     if pole_2 and len(pole_2) > 1: return pole_2
@@ -166,8 +200,7 @@ def przetworz_do_dataframe(orders):
                 lista.append({
                     "Order ID": order['order_id'], "Status ID": order['order_status_id'],
                     "Osoba": osoba, "Data": czas.date(), "Godzina": czas,
-                    "Paczki": paczki, "Karton": rodzaj_kartonu,
-                    "RawOrder": order
+                    "Paczki": paczki, "Karton": rodzaj_kartonu
                 })
             except: pass
     return pd.DataFrame(lista)
@@ -220,6 +253,8 @@ def oblicz_logike_scisla(df_osoby):
 
 if 'data_frame' not in st.session_state:
     st.session_state['data_frame'] = pd.DataFrame()
+if 'data_frame_5de' not in st.session_state:
+    st.session_state['data_frame_5de'] = pd.DataFrame()
 if 'last_update' not in st.session_state:
     st.session_state['last_update'] = None
 
@@ -236,9 +271,15 @@ st.sidebar.header("⚙️ Sterowanie")
 
 if st.sidebar.button("🔄 Odśwież dane z API"):
     with st.spinner(f"Pobieram dane ({DNI_DO_POBRANIA_API} dni)..."):
+        # Pobieranie danych standardowych
         raw_data = pobierz_dane_z_api(DNI_DO_POBRANIA_API)
         df_new = przetworz_do_dataframe(raw_data)
         st.session_state['data_frame'] = df_new
+        
+        # Pobieranie danych dla nowej metody (status 136559)
+        raw_data_5de = pobierz_dane_5de_z_api(DNI_DO_POBRANIA_API)
+        st.session_state['data_frame_5de'] = pd.DataFrame(raw_data_5de)
+        
         st.session_state['last_update'] = datetime.now().strftime("%H:%M")
         st.rerun()
 
@@ -247,6 +288,7 @@ if st.session_state['data_frame'].empty:
     st.stop()
 else:
     df_full = st.session_state['data_frame']
+    df_5de_full = st.session_state['data_frame_5de']
     st.sidebar.success(f"Baza: {st.session_state['last_update']} ({len(df_full)} zam.)")
 
 st.sidebar.markdown("---")
@@ -278,6 +320,14 @@ elif opcja_czasu == "Zakres niestandardowy":
 
 maska = (df_full['Data'] >= start) & (df_full['Data'] <= end)
 df = df_full.loc[maska]
+
+# Filtrowanie po dacie również dla danych 5DE (jeśli posiadają pole date_add)
+if not df_5de_full.empty and 'date_add' in df_5de_full.columns:
+    date_from_ts = int(datetime.combine(start, datetime.min.time()).timestamp())
+    date_to_ts = int(datetime.combine(end, datetime.max.time()).timestamp())
+    df_5de_filtered = df_5de_full[(df_5de_full['date_add'] >= date_from_ts) & (df_5de_full['date_add'] <= date_to_ts)]
+else:
+    df_5de_filtered = df_5de_full
 
 lista_osob = sorted(df['Osoba'].unique().tolist())
 wybrani = st.sidebar.multiselect("👥 Pracownicy:", lista_osob, default=lista_osob)
@@ -368,16 +418,15 @@ if not df.empty:
         c_k2.dataframe(kartony, hide_index=True, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("📦 Dodatkowy Raport Kartonów (Analiza extra_field_1)")
+        st.subheader("📦 Dodatkowy Raport Kartonów (Status 136559 - Metoda 5DE)")
 
-        # Nowa, uodporniona metoda zliczania bazująca na przeszukiwaniu treści extra_field_1
+        # Logika zliczania ze statusu 136559
         licznik_5de = {"1x5DE": 0, "2x5DE": 0}
         nx5de_wystapienia = 0
 
-        for order in df['RawOrder']:
+        for order in df_5de_filtered.to_dict('records'):
             extra_1 = str(order.get('extra_field_1', ''))
             
-            # Bezpieczne przeszukiwanie wzorców w polu extra_field_1
             if re.search(r'\b1x5DE\b', extra_1):
                 licznik_5de["1x5DE"] += 1
             if re.search(r'\b2x5DE\b', extra_1):
@@ -390,22 +439,21 @@ if not df.empty:
             if re.search(r'\b6x5DE\b', extra_1):
                 licznik_5de["2x5DE"] += 3
             
-            # Jeśli występuje napis zawierający 5DE, ale nie dopasował się do powyższych standardów
             if "5DE" in extra_1 and not any(w in extra_1 for w in ["1x5DE", "2x5DE", "3x5DE", "4x5DE", "6x5DE"]):
                 nx5de_wystapienia += 1
 
         dane_5de = [
-            {"Karton (Dodatkowa metoda)": "1x5DE", "Ilość": licznik_5de["1x5DE"]},
-            {"Karton (Dodatkowa metoda)": "2x5DE", "Ilość": licznik_5de["2x5DE"]}
+            {"Karton (Status 136559)": "1x5DE", "Ilość": licznik_5de["1x5DE"]},
+            {"Karton (Status 136559)": "2x5DE", "Ilość": licznik_5de["2x5DE"]}
         ]
 
         if nx5de_wystapienia > 0:
-            dane_5de.append({"Karton (Dodatkowa metoda)": "Nx5DE (Inne / Niezróżnicowane)", "Ilość": nx5de_wystapienia})
+            dane_5de.append({"Karton (Status 136559)": "Nx5DE (Inne / Niezróżnicowane)", "Ilość": nx5de_wystapienia})
 
         df_5de_summary = pd.DataFrame(dane_5de).sort_values('Ilość', ascending=False)
 
         c_5de1, c_5de2 = st.columns([2, 1])
-        c_5de1.bar_chart(df_5de_summary.set_index('Karton (Dodatkowa metoda)'), color="#2ecc71")
+        c_5de1.bar_chart(df_5de_summary.set_index('Karton (Status 136559)'), color="#2ecc71")
         c_5de2.dataframe(df_5de_summary, hide_index=True, use_container_width=True)
 
 else:
