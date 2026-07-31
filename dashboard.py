@@ -418,7 +418,7 @@ if not df.empty:
         c_k2.dataframe(kartony, hide_index=True, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("📦 Dodatkowy Raport Kartonów (Status 136559 - Metoda 5DE)")
+        st.subheader("📦 Kartony Niemieckie)")
 
         # Logika zliczania ze statusu 136559
         licznik_5de = {"1x5DE": 0, "2x5DE": 0}
