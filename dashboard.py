@@ -167,7 +167,7 @@ def przetworz_do_dataframe(orders):
                     "Order ID": order['order_id'], "Status ID": order['order_status_id'],
                     "Osoba": osoba, "Data": czas.date(), "Godzina": czas,
                     "Paczki": paczki, "Karton": rodzaj_kartonu,
-                    "RawOrder": order # Przechowujemy cały obiekt zamówienia dla nowej metody
+                    "RawOrder": order
                 })
             except: pass
     return pd.DataFrame(lista)
@@ -368,41 +368,44 @@ if not df.empty:
         c_k2.dataframe(kartony, hide_index=True, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("📦 Dodatkowy Raport Kartonów (Nowa metoda z extra_field_1)")
+        st.subheader("📦 Dodatkowy Raport Kartonów (Analiza extra_field_1)")
 
-        # Nowa metoda zliczania bazująca na extra_field_1
+        # Nowa, uodporniona metoda zliczania bazująca na przeszukiwaniu treści extra_field_1
         licznik_5de = {"1x5DE": 0, "2x5DE": 0}
         nx5de_wystapienia = 0
 
         for order in df['RawOrder']:
-            extra_1 = str(order.get('extra_field_1', '')).strip()
+            extra_1 = str(order.get('extra_field_1', ''))
             
-            if "1x5DE" in extra_1:
+            # Bezpieczne przeszukiwanie wzorców w polu extra_field_1
+            if re.search(r'\b1x5DE\b', extra_1):
                 licznik_5de["1x5DE"] += 1
-            elif "2x5DE" in extra_1:
+            if re.search(r'\b2x5DE\b', extra_1):
                 licznik_5de["2x5DE"] += 1
-            elif "3x5DE" in extra_1:
+            if re.search(r'\b3x5DE\b', extra_1):
                 licznik_5de["1x5DE"] += 1
                 licznik_5de["2x5DE"] += 1
-            elif "4x5DE" in extra_1:
+            if re.search(r'\b4x5DE\b', extra_1):
                 licznik_5de["2x5DE"] += 2
-            elif "6x5DE" in extra_1:
+            if re.search(r'\b6x5DE\b', extra_1):
                 licznik_5de["2x5DE"] += 3
-            elif "5DE" in extra_1:
+            
+            # Jeśli występuje napis zawierający 5DE, ale nie dopasował się do powyższych standardów
+            if "5DE" in extra_1 and not any(w in extra_1 for w in ["1x5DE", "2x5DE", "3x5DE", "4x5DE", "6x5DE"]):
                 nx5de_wystapienia += 1
 
         dane_5de = [
-            {"Karton (Nowa metoda)": "1x5DE", "Ilość": licznik_5de["1x5DE"]},
-            {"Karton (Nowa metoda)": "2x5DE", "Ilość": licznik_5de["2x5DE"]}
+            {"Karton (Dodatkowa metoda)": "1x5DE", "Ilość": licznik_5de["1x5DE"]},
+            {"Karton (Dodatkowa metoda)": "2x5DE", "Ilość": licznik_5de["2x5DE"]}
         ]
 
         if nx5de_wystapienia > 0:
-            dane_5de.append({"Karton (Nowa metoda)": "Nx5DE (Inne / Niezróżnicowane)", "Ilość": nx5de_wystapienia})
+            dane_5de.append({"Karton (Dodatkowa metoda)": "Nx5DE (Inne / Niezróżnicowane)", "Ilość": nx5de_wystapienia})
 
         df_5de_summary = pd.DataFrame(dane_5de).sort_values('Ilość', ascending=False)
 
         c_5de1, c_5de2 = st.columns([2, 1])
-        c_5de1.bar_chart(df_5de_summary.set_index('Karton (Nowa metoda)'), color="#2ecc71")
+        c_5de1.bar_chart(df_5de_summary.set_index('Karton (Dodatkowa metoda)'), color="#2ecc71")
         c_5de2.dataframe(df_5de_summary, hide_index=True, use_container_width=True)
 
 else:
