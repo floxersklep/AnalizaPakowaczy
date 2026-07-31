@@ -58,7 +58,7 @@ if not st.session_state['zalogowany']:
 
 # --- STAŁE I KONFIGURACJA LOGIKI ---
 DNI_DO_POBRANIA_API = 90 
-FILTR_STATUSOW = [61254, 110811] # Przywrócone oryginalne dwa statusy do starej metody
+FILTR_STATUSOW = [61254, 110811] # Oryginalne dwa statusy do starej metody
 PROG_ODCIECIA_CZASU_MINUT = 10   
 MAX_PRZERWA_MINUT = 30             
 CZAS_ZA_START = 3                
@@ -368,29 +368,27 @@ if not df.empty:
         c_k2.dataframe(kartony, hide_index=True, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("📦 Dodatkowy Raport Kartonów (Nowa metoda 5DE)")
+        st.subheader("📦 Dodatkowy Raport Kartonów (Nowa metoda z extra_field_1)")
 
-        # Nowa, niezależna metoda zliczania dla statusu 136559 i dedykowanych pól
+        # Nowa metoda zliczania bazująca na extra_field_1
         licznik_5de = {"1x5DE": 0, "2x5DE": 0}
         nx5de_wystapienia = 0
 
         for order in df['RawOrder']:
-            # Pobieranie wartości z nowego źródła (status 136559 i dedykowane pole dodatkowe, np. extra_field_2 lub inne)
-            # Tutaj sprawdzamy extra_field_2 jako główne źródło nowej metody
-            val = str(order.get('extra_field_2', '')).strip()
+            extra_1 = str(order.get('extra_field_1', '')).strip()
             
-            if val == "1x5DE":
+            if "1x5DE" in extra_1:
                 licznik_5de["1x5DE"] += 1
-            elif val == "2x5DE":
+            elif "2x5DE" in extra_1:
                 licznik_5de["2x5DE"] += 1
-            elif val == "3x5DE":
+            elif "3x5DE" in extra_1:
                 licznik_5de["1x5DE"] += 1
                 licznik_5de["2x5DE"] += 1
-            elif val == "4x5DE":
+            elif "4x5DE" in extra_1:
                 licznik_5de["2x5DE"] += 2
-            elif val == "6x5DE":
+            elif "6x5DE" in extra_1:
                 licznik_5de["2x5DE"] += 3
-            elif "5DE" in val:
+            elif "5DE" in extra_1:
                 nx5de_wystapienia += 1
 
         dane_5de = [
