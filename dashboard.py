@@ -420,61 +420,60 @@ if not df.empty:
         st.markdown("---")
         st.subheader("📦 Kartony Niemieckie")
 
-        from decimal import Decimal, InvalidOperation
-
-        def waga_zamowienia(order):
-            """Suma wag wszystkich produktów: waga sztuki w kg × ilość."""
-            produkty = order.get("products")
-            if not isinstance(produkty, list) or not produkty:
-                return None
-            suma = Decimal("0")
-            try:
-                for produkt in produkty:
-                    waga = Decimal(str(produkt.get("weight", "")).strip().replace(",", "."))
-                    ilosc = Decimal(str(produkt.get("quantity", "")).strip().replace(",", "."))
-                    if (not waga.is_finite() or not ilosc.is_finite()
-                            or waga <= 0 or ilosc <= 0):
-                        return None
-                    suma += waga * ilosc
-            except (InvalidOperation, TypeError, ValueError, AttributeError):
-                return None
-            return suma
-
-        # Oznaczenie, minimalna i maksymalna waga w kg,
-        # liczba kartonów: 1x5DE, 2x5DE, 4x5DE.
-        reguly_de = [
-            ("1(5L)", Decimal("0"),    Decimal("5"),  (1, 0, 0)),
-            ("1(5L)", Decimal("5.1"),  Decimal("10"), (0, 1, 0)),
-            ("1(5L)", Decimal("10.1"), Decimal("20"), (0, 0, 1)),
-            ("2(5L)", Decimal("20.1"), Decimal("30"), (0, 1, 1)),
-            ("2(5L)", Decimal("30.1"), Decimal("40"), (0, 0, 2)),
-            ("3(5L)", Decimal("40.1"), Decimal("50"), (0, 1, 2)),
-            ("3(5L)", Decimal("50.1"), Decimal("60"), (0, 0, 3)),
-        ]
+        # Liczba kartonów: 1x5DE, 2x5DE, 4x5DE.
+        reguly_de = {
+            "1x5DE": (1, 0, 0),
+            "2x5DE": (0, 1, 0),
+            "4x5DE": (0, 0, 1),
+            "4x5DEi2x5DE": (0, 1, 1),
+            "2x4x5DE": (0, 0, 2),
+            "2x4x5DEi2x5DE": (0, 1, 2),
+            "3x4x5DE": (0, 0, 3),
+        }
         licznik_de = {"1x5DE": 0, "2x5DE": 0, "4x5DE": 0}
-        wzor_oznaczenia = re.compile(r"(?<!\w)(\d+\(5L\))(?!\w)")
+        niezakwalifikowane_de = 0
+
+        # Dłuższe oznaczenia sprawdzamy w całości, aby nie zliczać
+        # dodatkowo fragmentów, np. 2x5DE wewnątrz 4x5DEi2x5DE.
+        oznaczenia_de = sorted(
+            list(reguly_de) + ["Nx5DE"], key=len, reverse=True
+        )
+        wzor_de = re.compile(
+            r"(?<!\w)(?:"
+            + "|".join(re.escape(marker) for marker in oznaczenia_de)
+            + r")(?!\w)"
+        )
 
         for order in df_5de_filtered.to_dict("records"):
             wpis = str(order.get("extra_field_1") or "")
-            oznaczenia = wzor_oznaczenia.findall(wpis)
+            oznaczenia = wzor_de.findall(wpis)
+
+            # Jedno jednoznaczne oznaczenie na zamówienie.
+            # Brak oznaczenia lub kilka oznaczeń — pomijamy.
             if len(oznaczenia) != 1:
                 continue
-            oznaczenie = oznaczenia[0]
-            waga = waga_zamowienia(order)
-            if waga is None:
-                continue
-            for marker, minimum, maksimum, kartony in reguly_de:
-                if marker == oznaczenie and minimum <= waga <= maksimum:
-                    licznik_de["1x5DE"] += kartony[0]
-                    licznik_de["2x5DE"] += kartony[1]
-                    licznik_de["4x5DE"] += kartony[2]
-                    break
-            # Wszystko poza powyższymi regułami jest pomijane.
 
-        df_de_summary = pd.DataFrame([
+            oznaczenie = oznaczenia[0]
+            if oznaczenie == "Nx5DE":
+                niezakwalifikowane_de += 1
+                continue
+
+            kartony = reguly_de[oznaczenie]
+            licznik_de["1x5DE"] += kartony[0]
+            licznik_de["2x5DE"] += kartony[1]
+            licznik_de["4x5DE"] += kartony[2]
+
+        dane_de = [
             {"Karton (Status 136559)": rodzaj, "Ilość": ilosc}
             for rodzaj, ilosc in licznik_de.items()
-        ]).sort_values("Ilość", ascending=False)
+        ]
+        dane_de.append({
+            "Karton (Status 136559)": "Nx5DE (Niezakwalifikowane zamówienia)",
+            "Ilość": niezakwalifikowane_de,
+        })
+        df_de_summary = pd.DataFrame(dane_de).sort_values(
+            "Ilość", ascending=False
+        )
 
         c_de1, c_de2 = st.columns([2, 1])
         c_de1.bar_chart(
@@ -485,6 +484,10 @@ if not df.empty:
             df_de_summary,
             hide_index=True,
             use_container_width=True,
+        )
+        st.caption(
+            "Nx5DE oznacza liczbę niezakwalifikowanych zamówień, "
+            "a nie liczbę zużytych kartonów."
         )
 
 else:
